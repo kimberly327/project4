@@ -1,0 +1,139 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  project4
+
+  Sample SAM Template for project4
+
+# More info about Globals: https://github.com/awslabs/serverless-application-model/blob/master/docs/globals.rst
+Globals:
+  Function:
+    Timeout: 3
+
+Parameters:
+  Stage: 
+    Type: String
+  MainStackName:
+    Type: String
+  SQSName:
+    Type: String
+
+Resources:
+
+  Api:
+    Type: "AWS::Serverless::Api"
+    Properties:
+      StageName: !Sub ${Stage}
+      DefinitionBody:
+        openapi: '3.0.1'
+        info:
+          title: "Endpoint To SQS"
+          description: !Sub "Endpoint To SQS - ${Stage}"
+          version: "v1"
+        paths:
+          /addItem:
+            post:
+              responses:
+                "200":
+                  description: "200 response"
+                "400":
+                  description: "invalid request body"
+              x-amazon-apigateway-integration:
+                type: "aws"
+                responses:
+                  default:
+                    statusCode: "200"
+                httpMethod: "POST"
+                uri: !Sub "arn:aws:apigateway:${AWS::Region}:sqs:path/${AWS::AccountId}/${MySqsQueue.QueueName}"
+                requestParameters:
+                  integration.request.header.Content-Type: "'application/x-www-form-urlencoded'"
+                requestTemplates:
+                  "application/json": "Action=SendMessage&MessageBody=$context.requestTimeEpoch"
+                credentials: !GetAtt APIRole.Arn
+                responses:
+                  default:
+                    statusCode: "200"
+                    responseTemplates:
+                      application/json: '{"message": "Product sent for processing"}'
+
+  MySqsQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: MySqsQueue
+      RedrivePolicy: 
+        deadLetterTargetArn: !GetAtt MyDlqQueue.Arn
+        maxReceiveCount: 3
+
+  MyDlqQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: MyDlqQueue
+
+  APIRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - apigateway.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: AllowSwsIntegration
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                  - sqs:GetQueueUrl
+                Resource: !GetAtt MySqsQueue.Arn              
+
+  HelloWorldFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: hello-world/
+      Handler: app.lambdaHandler
+      Runtime: nodejs18.x
+      Events:
+        SQSQueueEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt MySqsQueue.Arn
+      Policies:
+        - AWSLambdaBasicExecutionRole
+
+  ApplicationResourceGroup:
+    Type: AWS::ResourceGroups::Group
+    Properties:
+      Name:
+        Fn::Join:
+        - ''
+        - - ApplicationInsights-SAM-
+          - Ref: AWS::StackName
+      ResourceQuery:
+        Type: CLOUDFORMATION_STACK_1_0
+
+  ApplicationInsightsMonitoring:
+    Type: AWS::ApplicationInsights::Application
+    Properties:
+      ResourceGroupName:
+        Fn::Join:
+        - ''
+        - - ApplicationInsights-SAM-
+          - Ref: AWS::StackName
+      AutoConfigurationEnabled: 'true'
+    DependsOn: ApplicationResourceGroup
+
+Outputs:
+  # ServerlessRestApi is an implicit API created out of Events key under Serverless::Function
+  # Find out more about other implicit resources you can reference within SAM
+  # https://github.com/awslabs/serverless-application-model/blob/master/docs/internals/generated_resources.rst#api
+  HelloWorldFunction:
+    Description: Hello World Lambda Function ARN
+    Value: !GetAtt HelloWorldFunction.Arn
+  HelloWorldFunctionIamRole:
+    Description: Implicit IAM Role created for Hello World function
+    Value: !GetAtt HelloWorldFunctionRole.Arn
